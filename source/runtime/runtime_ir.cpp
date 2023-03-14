@@ -132,11 +132,15 @@ void RuntimeGraph::Build(const std::string& input_name,
       CHECK(layer != nullptr) << "Layer create failed!";
       if (layer) {
         kOperator->layer = layer;
+        layer->set_runtime_operator(kOperator);
       }
     }
   }
+
+  // 初始化节点的输入和输出空间
   RuntimeOperatorUtils::InitOperatorInput(operators_);
   RuntimeOperatorUtils::InitOperatorOutput(graph_->ops, operators_);
+
   graph_state_ = GraphState::Complete;
   input_name_ = input_name;
   output_name_ = output_name;
@@ -208,42 +212,16 @@ std::vector<std::shared_ptr<Tensor<float>>> RuntimeGraph::Forward(
     } else {
       // 如果当前节点是其他待执行节点，首先使用checkready检测它是否就绪
       std::string current_op_name = current_op->name;
-      if (!CheckOperatorReady(current_op)) {
-        if (operator_queue.empty()) {
-          // 当current op是最后一个节点的时候，说明它已经不能被ready
-          LOG(FATAL) << "Current operator is not ready!";
-          break;
-        } else {
-          // 如果current op不是最后一个节点，它还有被ready的可能性
-          operator_queue.push_back(current_op);
-        }
-      }
-      // 准备节点layer计算所需要的输入
-      const std::vector<std::shared_ptr<RuntimeOperand>>& input_operand_datas =
-          current_op->input_operands_seq;
-      // layer的输入
-      std::vector<std::shared_ptr<Tensor<float>>> layer_input_datas;
-      for (const auto& input_operand_data : input_operand_datas) {
-        for (const auto& input_data : input_operand_data->datas) {
-          layer_input_datas.push_back(input_data);
-        }
-      }
-
-      CHECK(!layer_input_datas.empty())
-          << current_op->name << " Layer input data is empty";
-      CHECK(current_op->output_operands != nullptr &&
-            !current_op->output_operands->datas.empty())
-          << "Layer output data is empty";
+      CHECK_EQ(CheckOperatorReady(current_op), true)
+          << "Current operator " << current_op->name << " is not ready!";
 
       const auto& start = std::chrono::steady_clock::now();
-      // 执行operator当中的layer计算过程
-      // layer的计算结果存放在current_op->output_operands->datas中
-      InferStatus status = current_op->layer->Forward(
-          layer_input_datas, current_op->output_operands->datas);
+      InferStatus status = current_op->layer->Forward();
+
+      CHECK(status == InferStatus::kInferSuccess)
+          << current_op->layer->layer_name()
+          << " layer forward failed, error code: " << int(status);
       if (debug) {
-        std::replace_if(
-            current_op_name.begin(), current_op_name.end(),
-            [](char c) { return c == '.'; }, '_');
         const double duration =
             std::chrono::duration_cast<std::chrono::duration<double>>(
                 std::chrono::steady_clock::now() - start)
@@ -256,9 +234,6 @@ std::vector<std::shared_ptr<Tensor<float>>> RuntimeGraph::Forward(
         }
       }
 
-      CHECK(status == InferStatus::kInferSuccess)
-          << current_op->layer->layer_name()
-          << " layer forward failed, error code: " << int(status);
       const auto copy_start = std::chrono::steady_clock::now();
       // 将当前layer的计算输出current_op->output_operands->datas赋值到后继节点的输入中
       ProbeNextLayer(current_op, operator_queue,
