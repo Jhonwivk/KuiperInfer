@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(kuiper_infer)
 set(CMAKE_CXX_STANDARD 17)
 include_directories(./include)
+set(DEVELOPMENT ON)
 if (MSVC)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
     # 假如编译x64，那么SSE2永远可用
